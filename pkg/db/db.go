@@ -38,12 +38,12 @@ func InitDB(dbURL string) error {
 	// This helps prevent overloading your database (especially on a managed service like Neon.tech).
 	// 25 is a common starting point, but you might adjust it based on your Neon.tech plan
 	// and your application's load.
-	DB.SetMaxOpenConns(25)
+	DB.SetMaxOpenConns(100)
 
 	// SetMaxIdleConns determines how many unused connections are kept alive in the pool.
 	// These idle connections are ready for immediate reuse, reducing latency for new requests.
 	// 10 is a reasonable default.
-	DB.SetMaxIdleConns(10)
+	DB.SetMaxIdleConns(100)
 
 	// You can also set connection lifetime and idle timeout here.
 	// For example, to close connections that have been idle for more than 5 minutes:

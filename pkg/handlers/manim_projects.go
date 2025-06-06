@@ -4,7 +4,10 @@ import (
 	"database/sql"
 	"net/http"
 	"strings"
-
+	"fmt"
+	"bytes"
+	"encoding/json"
+	"time"
 	"github.com/ASHISH26940/manim-orchestrator-api/pkg/db"
 	"github.com/ASHISH26940/manim-orchestrator-api/pkg/llm"
 	"github.com/ASHISH26940/manim-orchestrator-api/pkg/config"
@@ -30,6 +33,21 @@ func NewHandlers(cfg *config.Config, llmClient *llm.LLMClient) *Handlers {
 		Config:    cfg,
 		LLMClient: llmClient,
 	}
+}
+
+type RendererRequest struct {
+	ProjectID     string `json:"project_id"`
+	ScriptContent string `json:"script_content"`
+	CallbackURL   string `json:"callback_url"`
+}
+
+// RenderCallbackRequest defines the expected structure of the POST request from the Python renderer to our callback endpoint.
+type RenderCallbackRequest struct {
+	ProjectID    string `json:"project_id"`
+	Status       string `json:"status"` // e.g., "completed", "failed", "upload_failed", etc.
+	VideoURL     string `json:"video_url"` // Will be the R2 public URL on success, "N/A" or empty on failure
+	Message      string `json:"message"` // General message from renderer
+	ErrorDetails string `json:"error_details"` // Optional, for specific error info
 }
 
 
@@ -326,6 +344,7 @@ type RendererResponse struct {
 }
 
 
+// --- REVERTED/UPDATED: TriggerManimGenerationAndRender Handler ---
 func (h *Handlers) TriggerManimGenerationAndRender(c *gin.Context) {
 	projectIDParam := c.Param("id")
 	projectID, err := uuid.Parse(projectIDParam)
@@ -356,7 +375,7 @@ func (h *Handlers) TriggerManimGenerationAndRender(c *gin.Context) {
 	}
 	if project.UserID != claims.UserID {
 		log.Warnf("TriggerManimGenerationAndRender: User %s attempted to trigger render for project %s owned by %s.", claims.UserID.String(), projectID.String(), project.UserID.String())
-		utils.ResponseWithError(c, http.StatusForbidden, "You do not have permission to trigger generation for this project", nil)
+		utils.ResponseWithError(c, http.StatusForbidden, "You do not have permission to trigger rendering for this project", nil)
 		return
 	}
 
@@ -367,31 +386,156 @@ func (h *Handlers) TriggerManimGenerationAndRender(c *gin.Context) {
 		return
 	}
 
-	// 2. Update project status to indicate generation is in progress (optional for this test, but good practice)
-	// For this test, we might not persist this status to avoid cluttering DB with 'generating' without rendering.
-	// But keeping it as a conceptual step.
-	log.Infof("Attempting to generate Manim code for project %s with prompt: %s", projectID.String(), project.Prompt)
+	// 2. Update project status to indicate generation is in progress
+	project.RenderStatus = "generating"
+	err = queries.UpdateManimProject(project) // Update the status in DB
+	if err != nil {
+		log.Errorf("TriggerManimGenerationAndRender: Failed to update project %s status to 'generating': %v", projectID.String(), err)
+		// Continue as this is a best effort update, but log it
+	}
+	log.Infof("Project %s status updated to 'generating'.", projectID.String())
+
+
+	// --- Start of LLM Generation & Renderer Trigger ---
 
 	// 3. Generate Manim code using LLM
 	generatedManimCode, err := h.LLMClient.GenerateManimCode(project.Prompt)
 	if err != nil {
 		log.Errorf("TriggerManimGenerationAndRender: Failed to generate Manim code for project %s: %v", projectID.String(), err)
-		// No need to update DB status to failed here, as we are only testing generation.
+		project.RenderStatus = "failed: code_gen_error"
+		queries.UpdateManimProject(project) // Best effort update
 		utils.ResponseWithError(c, http.StatusInternalServerError, "Failed to generate Manim code", nil)
 		return
 	}
 	log.Infof("Manim code generated for project %s. Length: %d", projectID.String(), len(generatedManimCode))
 
-	// 4. Send the generated code as a response for verification
-	// THIS IS THE TEMPORARY PART - instead of calling renderer, we return the code.
-	utils.ResponseWithSuccess(c, http.StatusOK, "Manim code generated successfully (rendering skipped for test)", gin.H{
-		"project_id": projectID.String(),
-		"prompt":     project.Prompt,
-		"generated_manim_code": generatedManimCode,
-		"status":     "code_generated_only_for_test",
-	})
+	callbackHost := h.Config.Host // Default assuming Go is in Docker-Compose where HOST is its service name
+    if h.Config.Host == "127.0.0.1" || h.Config.Host == "0.0.0.0" { // ADDED "0.0.0.0" check
+        // This is a common pattern for Docker Desktop to reach host services.
+        // For production or pure Linux setups, review your networking.
+        callbackHost = "host.docker.internal"
+    }
+    // IMPORTANT: Make sure the callback endpoint is correctly configured in your Go router
+    // to match this URL structure (e.g., /api/projects/render-callback).
+    callbackURL := fmt.Sprintf("http://%s:%s/api/projects/render-callback", callbackHost, h.Config.Port)
 
-	// ALL THE FOLLOWING STEPS (calling renderer, updating status to rendering/completed, etc.)
-	// ARE SKIPPED IN THIS TEMPORARY VERSION.
-	// You will uncomment and re-enable them after verifying code generation.
+
+	rendererReqBody := RendererRequest{
+		ProjectID:     project.ID.String(),
+		ScriptContent: generatedManimCode,
+		CallbackURL:   callbackURL,
+	}
+	log.Debugf("%s",rendererReqBody)
+
+	jsonBody, _ := json.Marshal(rendererReqBody)
+	
+	client := &http.Client{Timeout: 10 * time.Second} // Shorter timeout for initial request, as rendering is async
+	rendererURL := fmt.Sprintf("%s/render", h.Config.ManimRendererURL) // ManimRendererURL from config
+
+	req, err := http.NewRequest("POST", rendererURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		log.Errorf("TriggerManimGenerationAndRender: Failed to create request to renderer: %v", err)
+		project.RenderStatus = "failed: renderer_req_error"
+		queries.UpdateManimProject(project)
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Failed to prepare render request", nil)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Errorf("TriggerManimGenerationAndRender: Failed to send request to renderer %s: %v", rendererURL, err)
+		project.RenderStatus = "failed: renderer_comm_error"
+		queries.UpdateManimProject(project)
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Failed to connect to Manim renderer", nil)
+		return
+	}
+	defer resp.Body.Close()
+
+	// The renderer will respond immediately with 202 Accepted
+	if resp.StatusCode != http.StatusAccepted { // Expected 202
+		var errorResp map[string]string
+		json.NewDecoder(resp.Body).Decode(&errorResp)
+		errMsg := errorResp["error"]
+		if errMsg == "" {
+			errMsg = "Unknown error from renderer."
+		}
+		log.Errorf("TriggerManimGenerationAndRender: Renderer returned unexpected status %d: %s", resp.StatusCode, errMsg)
+		project.RenderStatus = fmt.Sprintf("failed: renderer_status_%d", resp.StatusCode)
+		queries.UpdateManimProject(project)
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Failed to start Manim rendering process", errMsg)
+		return
+	}
+
+	// 5. Respond immediately to the client that rendering has started (asynchronous)
+	log.Infof("Manim rendering process initiated for project %s. Renderer returned 202 Accepted.", projectID.String())
+	utils.ResponseWithSuccess(c, http.StatusAccepted, "Manim rendering process initiated", gin.H{
+		"project_id": projectID.String(),
+		"status":     "rendering_initiated",
+		"message":    "Manim rendering is in progress. The video URL will be updated via callback.",
+	})
+	// --- End of LLM Generation & Renderer Trigger ---
+}
+
+
+// --- NEW: HandleRenderCallback Handler ---
+// This endpoint receives the result of the Manim rendering from the Python service.
+func (h *Handlers) HandleRenderCallback(c *gin.Context) {
+	var callback RenderCallbackRequest // Use the struct defined above
+	if err := c.ShouldBindJSON(&callback); err != nil {
+		log.Errorf("HandleRenderCallback: Invalid callback request body: %v", err)
+		utils.ResponseWithError(c, http.StatusBadRequest, "Invalid callback request body", err.Error())
+		return
+	}
+
+	projectID, err := uuid.Parse(callback.ProjectID)
+	if err != nil {
+		log.Errorf("HandleRenderCallback: Invalid ProjectID in callback '%s': %v", callback.ProjectID, err)
+		utils.ResponseWithError(c, http.StatusBadRequest, "Invalid ProjectID in callback", nil)
+		return
+	}
+
+	log.Infof("Received render callback for Project ID: %s, Status: %s, VideoURL: %s",
+		callback.ProjectID, callback.Status, callback.VideoURL)
+
+	project, err := queries.FindManimProjectByID(projectID)
+	if err != nil {
+		log.Errorf("HandleRenderCallback: Failed to find project %s for callback: %v", projectID.String(), err)
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Failed to find project for callback", nil)
+		return
+	}
+	if project == nil {
+		log.Warnf("HandleRenderCallback: Project %s not found for callback. Perhaps already deleted?", projectID.String())
+		utils.ResponseWithError(c, http.StatusNotFound, "Project not found for callback", nil)
+		return
+	}
+
+	// Update project status based on callback
+	project.RenderStatus = callback.Status
+	if callback.Status == "completed" {
+		// Only set video_url if status is completed and URL is not "N/A"
+		if callback.VideoURL != "" && callback.VideoURL != "N/A" {
+			project.VideoURL = sql.NullString{String: callback.VideoURL, Valid: true}
+			log.Infof("Project %s render completed. Video URL: %s", projectID.String(), callback.VideoURL)
+		} else {
+			project.VideoURL = sql.NullString{Valid: false} // Ensure it's NULL if completed but no URL
+			log.Warnf("Project %s completed, but no valid video URL provided in callback.", projectID.String())
+		}
+	} else {
+		// Clear URL on failure/non-completed status
+		project.VideoURL = sql.NullString{Valid: false}
+		log.Errorf("Project %s rendering failed with status: %s. Details: %s", projectID.String(), callback.Status, callback.ErrorDetails)
+	}
+
+	// Important: The `updated_at` field will be automatically updated by the DB trigger
+	// when we call queries.UpdateManimProject.
+
+	err = queries.UpdateManimProject(project)
+	if err != nil {
+		log.Errorf("HandleRenderCallback: Failed to update project %s status and URL after callback: %v", projectID.String(), err)
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Failed to update project after rendering callback", nil)
+		return
+	}
+
+	utils.ResponseWithSuccess(c, http.StatusOK, "Callback processed successfully", nil)
 }

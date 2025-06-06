@@ -41,6 +41,8 @@ func main(){
 	router:=gin.Default()
 
 	router.GET("/health",handlers.HealthCheck)
+	router.POST("/api/projects/render-callback", apiHandlers.HandleRenderCallback) // <--- CRITICAL: Callback route
+
 	authRoutes:=router.Group("/auth")
 	{
 		authRoutes.POST("/register",handlers.RegisterUser)

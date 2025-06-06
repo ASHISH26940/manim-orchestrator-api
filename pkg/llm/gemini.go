@@ -65,20 +65,22 @@ func (c *LLMClient) GenerateManimCode(userPrompt string) (string, error) {
 	// 8. If the prompt is too complex or ambiguous, generate a simple, safe default Manim animation.
 	// 9. IMPORTANT: Wrap the entire generated Manim Python code in a single Markdown code block (```python ... ```).
 	//
-    promptTemplate := `Generate Manim Python code based on this request.
+promptTemplate := `Generate Manim Python code based on this request.
 
 Instructions:
 - Provide ONLY valid, runnable Manim Python code.
 - No explanations, external comments, or extra text.
 - Code must be self-contained in a class inheriting from 'Scene'.
-- Use 'self.play()' for animations and 'self.wait()' for pauses.
+- **Every animation sequence MUST include at least one 'self.play()' followed by 'self.wait()' for scene progression.**
 - For complex/unclear requests, output a simple default animation.
 
-Example Input: "Animate a blue circle fading in."
+
+Example Input: "create a square"
 Example Output:
-` + "\nfrom manim import *\n\nclass MyAnimation(Scene):\n    def construct(self):\n        circle = Circle(color=BLUE)\n        self.play(FadeIn(circle))\n        self.wait(1)\n" + `
+` + "\nfrom manim import *\n\nclass MyScene(Scene):\n    def construct(self):\n        square = Square(color=RED)\n        self.play(FadeIn(square))\n        self.wait(1)\n" + `
 
 User request: "%s"`
+
 
     fullPrompt := fmt.Sprintf(promptTemplate, userPrompt)
     
