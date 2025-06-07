@@ -14,6 +14,7 @@ import (
 	"github.com/ASHISH26940/manim-orchestrator-api/pkg/middleware" // <--- Import middleware package
 	"github.com/ASHISH26940/manim-orchestrator-api/pkg/utils" 
 	"github.com/gin-gonic/gin"
+	cors "github.com/gin-contrib/cors"
 	log "github.com/sirupsen/logrus"                           // Structured logger
 )
 
@@ -39,6 +40,24 @@ func main(){
 	apiHandlers := handlers.NewHandlers(cfg, llmClient)
 
 	router:=gin.Default()
+
+	// --- CORS CONFIGURATION ---
+	// Configure CORS middleware
+	router.Use(cors.New(cors.Config{
+		// Allow requests from your Next.js frontend development server
+		AllowOrigins: []string{"http://localhost:3000"},
+		// Allow common HTTP methods
+		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		// Allow common headers, including Authorization for JWT
+		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		// Allow sending of credentials (like cookies or HTTP authentication headers)
+		// Set to true if you are using cookies/session, otherwise false. For JWT in Authorization header, it's generally fine.
+		AllowCredentials: true,
+		// MaxAge defines the maximum age of the CORS preflight request in seconds.
+		// During this time, the browser will not send a preflight request for the same URL.
+		MaxAge: 12 * time.Hour,
+	}))
+	
 
 	router.GET("/health",handlers.HealthCheck)
 	router.POST("/api/projects/render-callback", apiHandlers.HandleRenderCallback) // <--- CRITICAL: Callback route

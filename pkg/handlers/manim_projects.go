@@ -169,7 +169,21 @@ func GetUserManimProjects(c *gin.Context) {
 	// Convert db.ManimProject slice to ProjectResponse slice
 	projectResponses := make([]ProjectResponse, len(projects))
 	for i, p := range projects {
-		projectResponses[i] = newProjectResponse(&p)
+		pr := newProjectResponse(&p) // Create the initial response object
+
+		// --- URL TRANSFORMATION LOGIC ---
+		// Check if VideoURL exists and contains the old domain
+		if pr.VideoURL != "" && strings.Contains(pr.VideoURL, "41eca3477bd94f0eb869bef997e35147.r2.dev") {
+			pr.VideoURL = strings.Replace(
+				pr.VideoURL,
+				"https://41eca3477bd94f0eb869bef997e35147.r2.dev",
+				"https://pub-b0b0ca8b1fc2487b82486c56d37c2667.r2.dev",
+				1, // Only replace the first occurrence (the domain prefix)
+			)
+		}
+		// --- END URL TRANSFORMATION LOGIC ---
+
+		projectResponses[i] = pr
 	}
 
 	log.Infof("Found %d projects for user %s.", len(projects), claims.UserID.String())
