@@ -449,9 +449,23 @@ func (h *Handlers) TriggerManimGenerationAndRender(c *gin.Context) {
 	}
 	log.Infof("Manim code generated for project %s. Length: %d", projectID.String(), len(generatedManimCode))
 
-	callbackHost := h.Config.Host // Default assuming Go is in Docker-Compose where HOST is its service name
-    callbackURL := fmt.Sprintf("%s:%s/api/projects/render-callback", callbackHost, h.Config.Port)
-	log.Infof("%s",callbackURL)
+    orchestratorPublicHost := os.Getenv("RENDER_EXTERNAL_HOSTNAME")
+    var callbackURL string
+
+    if orchestratorPublicHost == "" {
+        // Fallback for local development if RENDER_EXTERNAL_HOSTNAME isn't set.
+        // This scenario means you're likely NOT on Render.com.
+        log.Warn("RENDER_EXTERNAL_HOSTNAME not set. Assuming local development or non-Render environment.")
+        // For local testing, ensure your h.Config.Host is set to 'localhost' or '127.0.0.1' and use http.
+        // Example: If h.Config.Host is "localhost" and h.Config.Port is "8000"
+        callbackURL = fmt.Sprintf("http://%s:%s/api/projects/render-callback", h.Config.Host, h.Config.Port)
+        log.Infof("Using local/fallback callback URL: %s", callbackURL)
+    } else {
+        // For Render.com, services are always accessible via HTTPS on their public domain (port 443).
+        // Do NOT include the internal application port (like :8000) in the public URL.
+        callbackURL = fmt.Sprintf("https://%s/api/projects/render-callback", orchestratorPublicHost)
+        log.Infof("Using public Render.com callback URL: %s", callbackURL)
+    }
 
 
 	rendererReqBody := RendererRequest{
