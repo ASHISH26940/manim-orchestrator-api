@@ -5,126 +5,184 @@ package llm
 import (
 	"context"
 	"fmt"
-	"strings"
+	"strings" // New import for string manipulation
 
-	"github.com/ASHISH26940/manim-orchestrator-api/pkg/config" // To get the API key
 	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/api/option"
 )
 
-// LLMClient represents a client for interacting with the LLM.
-type LLMClient struct {
-	client *genai.Client // Store the top-level client
-	model  *genai.GenerativeModel
+// Service holds the Gemini AI client.
+type Service struct {
+	client *genai.GenerativeModel
+	ctx    context.Context // Context for API calls
 }
 
-// NewLLMClient initializes a new Gemini LLM client.
-func NewLLMClient(cfg *config.Config) (*LLMClient, error) {
-	if cfg.GeminiAPIKey == "" {
-		return nil, fmt.Errorf("Gemini API key is not provided")
-	}
-
-	ctx := context.Background()
-	
-	// Create the top-level client
-	client, err := genai.NewClient(ctx, option.WithAPIKey(cfg.GeminiAPIKey))
+// NewGeminiService creates a new Gemini AI service instance.
+func NewGeminiService(apiKey string) (*Service, error) {
+	ctx := context.Background() // Use a background context for the service
+	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
 	}
-
-	// Get the GenerativeModel from the client
+	// Use the 'gemini-pro' model for text generation
 	model := client.GenerativeModel("gemini-1.5-flash")
-
-	return &LLMClient{client: client, model: model}, nil // Store both
+	return &Service{client: model, ctx: ctx}, nil
 }
 
-// Close closes the underlying Gemini client.
-func (c *LLMClient) Close() {
-	if c.client != nil { // Call Close() on the top-level client
-		c.client.Close()
-	}
-	// No need to close c.model as it doesn't have a Close() method
-}
+// // DecomposePrompt takes a complex user prompt and uses Gemini to break it down
+// // into a JSON array of simpler, independent animation descriptions.
+// // Each description in the array is expected to be a self-contained unit.
+// func (s *Service) DecomposePrompt(complexPrompt string) ([]string, error) {
+// 	log.Debugf("Attempting to decompose complex prompt: %s", complexPrompt)
 
-// GenerateManimCode takes a user prompt and returns generated Manim Python code.
-func (c *LLMClient) GenerateManimCode(userPrompt string) (string, error) {
-	ctx := context.Background()
+// 	// Construct the prompt for Gemini. It's crucial to instruct it to return JSON.
+// 	decompositionPrompt := fmt.Sprintf(`
+// 	You are an expert Manim animation designer.
+// 	Decompose the following complex Manim animation request into an ordered JSON array of simple, self-contained Manim animation descriptions.
+// 	Each description should be a single string that can be used to generate a small, complete Manim animation segment.
+// 	Ensure the entire response is a valid JSON array of strings, with no additional text or formatting outside the array.
 
-	// This is where you craft your prompt to guide the LLM.
-	// Good prompt engineering is key to getting relevant Manim code.
-	//
-	// Instructions for the LLM:
-	// 1. You are an expert Manim animation code generator.
-	// 2. ONLY provide valid Python code using the Manim library.
-	// 3. Do NOT include any explanations, comments (unless within code), or extra text outside the code block.
-	// 4. Ensure the code is self-contained and runnable.
-	// 5. The scene class must inherit from `Scene`.
-	// 6. Use `self.play()` for animations and `self.wait()` for pauses.
-	// 7. Make the animation simple but illustrative of the prompt.
-	// 8. If the prompt is too complex or ambiguous, generate a simple, safe default Manim animation.
-	// 9. IMPORTANT: Wrap the entire generated Manim Python code in a single Markdown code block (```python ... ```).
-	//
-promptTemplate := `Generate Manim Python code based on this request.
+// 	Example Request: "Animate a red square fading in, then a blue circle transforms into a green triangle, and finally, a text 'The End' appears."
+// 	Example Response: ["Animate a red square fading in.", "A blue circle transforms into a green triangle.", "Display the text 'The End'."]
 
-Instructions:
-- Provide ONLY valid, runnable Manim Python code.
-- No explanations, external comments, or extra text.
-- Code must be self-contained in a class inheriting from 'Scene'.
-- **Every animation sequence MUST include at least one 'self.play()' followed by 'self.wait()' for scene progression.**
-- For complex/unclear requests, output a simple default animation.
+// 	Complex animation request to decompose: "%s"
+// 	`, complexPrompt)
+
+// 	resp, err := s.client.GenerateContent(s.ctx, genai.Text(decompositionPrompt))
+// 	if err != nil {
+// 		log.Errorf("Error generating content for decomposition: %v", err)
+// 		return nil, fmt.Errorf("gemini API call failed during decomposition: %w", err)
+// 	}
+
+// 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+// 		log.Warn("Gemini returned no candidates or content for decomposition.")
+// 		return nil, fmt.Errorf("gemini API returned no content for decomposition")
+// 	}
+
+// 	// Extract the text response
+// 	geminiResponsePart := resp.Candidates[0].Content.Parts[0]
+// 	geminiResponse, ok := geminiResponsePart.(genai.Text)
+// 	if !ok {
+// 		log.Errorf("Gemini response part is not text: %v", geminiResponsePart)
+// 		return nil, fmt.Errorf("gemini API returned non-text content for decomposition")
+// 	}
+
+// 	responseString := string(geminiResponse)
+// 	log.Debugf("Gemini raw decomposition response: %s", responseString)
+
+// 	// Attempt to parse the JSON array
+// 	var decomposedPrompts []string
+// 	// Gemini sometimes includes markdown fences (```json ... ```).
+// 	// We need to strip them to ensure valid JSON unmarshaling.
+// 	cleanResponse := strings.TrimSpace(responseString)
+// 	if strings.HasPrefix(cleanResponse, "```json") && strings.HasSuffix(cleanResponse, "```") {
+// 		cleanResponse = strings.TrimPrefix(cleanResponse, "```json")
+// 		cleanResponse = strings.TrimSuffix(cleanResponse, "```")
+// 		cleanResponse = strings.TrimSpace(cleanResponse)
+// 	} else if strings.HasPrefix(cleanResponse, "```") && strings.HasSuffix(cleanResponse, "```") { // Less specific markdown fence
+// 		cleanResponse = strings.TrimPrefix(cleanResponse, "```")
+// 		cleanResponse = strings.TrimSuffix(cleanResponse, "```")
+// 		cleanResponse = strings.TrimSpace(cleanResponse)
+// 	}
 
 
-Example Input: "create a square"
-Example Output:
+// 	err = json.Unmarshal([]byte(cleanResponse), &decomposedPrompts)
+// 	if err != nil {
+// 		log.Errorf("Failed to unmarshal Gemini decomposition response '%s': %v", cleanResponse, err)
+// 		return nil, fmt.Errorf("failed to parse decomposition JSON from Gemini: %w", err)
+// 	}
+
+// 	log.Infof("Successfully decomposed prompt into %d parts.", len(decomposedPrompts))
+// 	return decomposedPrompts, nil
+// }
+
+// GenerateManimCode takes a simple animation description and uses Gemini to generate
+// the corresponding Manim Python code.
+// This method's core logic remains the same, but it will now be called for each
+// decomposed sub-prompt by the handler.
+func (s *Service) GenerateManimCode(prompt string) (string, error) {
+	log.Debugf("Attempting to generate Manim code for prompt: %s", prompt)
+
+promptTemplate := `Generate complete and valid Manim Python code for the animation described in the user request.
+
+### Pre-computation and Reasoning Steps (Internal):
+1.  **Analyze and Deconstruct**: First, thoroughly analyze the user request to identify all explicit and implicit visual elements (Mobjects), animations, durations, colors, positions, and relationships between elements.
+2.  **Object Identification**: Extract all specific Manim Mobject types mentioned or implied (e.g., Circle, Square, Text, Line, Arc, Equation, Graph).
+3.  **Animation Mapping**: Map identified actions/verbs from the request to appropriate Manim animation functions (e.g., "create" -> Create, "show" -> FadeIn, "move" -> Transform/MoveTo, "rotate" -> Rotate). Consider natural animation types for each object.
+4.  **Property Extraction**: Identify all specified properties for each object and animation (e.g., color, size, radius, fill_opacity, stroke_width, duration, speed). Pay close attention to hex codes or standard Manim colors.
+5.  **Scene Flow Planning**: Determine the sequential flow of animations. If multiple actions are implied concurrently, consider [self.play(anim1, anim2)]. If sequential, use separate [self.play()] calls followed by [self.wait()].
+6.  **Conflict Resolution**: If there are conflicting instructions (e.g., "make it red and blue simultaneously"), prioritize explicit color requests over general descriptions. If an animation style contradicts an object's inherent property, prioritize the animation style for that specific [self.play()] call, but retain the object's base properties for subsequent animations. If ambiguity persists, default to a sensible visual choice.
+7.  **Ambiguity Handling**: If the request is truly ambiguous, nonsensical, or too complex to reasonably fulfill given Manim's capabilities or the prompt's constraints, default to the simple fallback animation as per "Strict Requirements #7".
+
+### Strict Requirements for Output:
+1.  **Code Only**: Provide ONLY the Python code. Do NOT include any explanations, external comments (other than standard Manim class/method docstrings or very brief line-level comments for complex logic), or conversational text.
+2.  **Self-Contained Class**: The entire animation logic must be within a single class that inherits from 'Scene'.
+3.  **Specific Class Name**: The main animation class MUST be named 'MyScene'.
+4.  **Colors (Hex Codes)**: When using colors, define them using hex codes (e.g., '#FF0000' for red, '#0000FF' for blue) or standard Manim color constants (e.g., RED, BLUE, WHITE, BLACK, YELLOW, GREEN). If a specific color is requested and a standard constant doesn't exist, use a suitable hex code.
+5.  **Scene Progression**: Every animation sequence MUST include at least one 'self.play()' call, which should then be followed by a 'self.wait(1)' or 'self.wait(duration)' for scene progression.
+6.  **Imports**: Include all necessary Manim imports at the top (e.g., 'from manim import *').
+7.  **Error Handling**: If the user request is ambiguous, nonsensical, or too complex to reasonably fulfill, output a simple default animation (e.g., a fading square or circle) instead.
+
+### Example 1:
+Input: "create a square"
+Output:
 ` + "\nfrom manim import *\n\nclass MyScene(Scene):\n    def construct(self):\n        square = Square(color=RED)\n        self.play(FadeIn(square))\n        self.wait(1)\n" + `
 
-User request: "%s"`
+### Example 2:
+Input: "Create a flower using circles. It should have a yellow center and pink petals. Also, add a green stem and a leaf."
+Output:
+` + "\nfrom manim import *\n\nclass MyScene(Scene):\n    def construct(self):\n        center_circle = Circle(radius=0.5, color=YELLOW, fill_opacity=1)\n        self.play(Create(center_circle))\n        self.wait(0.5)\n\n        petal_color = PINK\n        petal_radius = 0.4\n        num_petals = 8\n\n        petals = VGroup()\n\n        for i in range(num_petals):\n            angle = i * (2 * PI / num_petals)\n            x = (center_circle.radius + petal_radius * 0.8) * np.cos(angle)\n            y = (center_circle.radius + petal_radius * 0.8) * np.sin(angle)\n            \n            petal = Circle(radius=petal_radius, color=petal_color, fill_opacity=0.7)\n            petal.move_to(np.array([x, y, 0]))\n            petals.add(petal)\n\n        self.play(LaggedStart(*[GrowFromCenter(petal) for petal in petals], lag_ratio=0.15))\n        self.wait(1)\n\n        stem = Line(center_circle.get_bottom(), center_circle.get_bottom() + DOWN * 2, color=GREEN, stroke_width=8)\n        \n        leaf = Polygon(\n            stem.get_end() + LEFT * 0.5 + UP * 0.5,\n            stem.get_end() + LEFT * 1.5 + UP * 0.2,\n            stem.get_end() + LEFT * 0.5 + DOWN * 0.2,\n            color=GREEN, fill_opacity=0.8\n        )\n        leaf.rotate(PI/4, about_point=stem.get_end() + LEFT * 0.5 + UP * 0.2)\n\n        self.play(\n            Create(stem),\n            FadeIn(leaf, shift=RIGHT)\n        )\n        self.wait(2)\n" + `
 
+### User Request:
+"%s"`
 
-    fullPrompt := fmt.Sprintf(promptTemplate, userPrompt)
-    
-    log.WithFields(log.Fields{"user_prompt": userPrompt}).Info("Sending prompt to Gemini LLM.")
+	manimCodePrompt := fmt.Sprintf(promptTemplate, prompt)
 
-	// Use c.model directly as it's already configured from the client
-    resp, err := c.model.GenerateContent(ctx, genai.Text(fullPrompt))
-    if err != nil {
-    	return "", fmt.Errorf("failed to generate content from Gemini: %w", err)
-    }
+	resp, err := s.client.GenerateContent(s.ctx, genai.Text(manimCodePrompt))
+	if err != nil {
+		log.Errorf("Error generating content for Manim code: %v", err)
+		return "", fmt.Errorf("gemini API call failed during code generation: %w", err)
+	}
 
-    if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
-    	log.Warn("Gemini returned no candidates or empty content.")
-    	return "", fmt.Errorf("Gemini returned no valid content for the prompt")
-    }
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		log.Warn("Gemini returned no candidates or content for Manim code generation.")
+		return "", fmt.Errorf("gemini API returned no content for Manim code generation")
+	}
 
-    // Extract text from the first part of the first candidate's content
-    generatedText := fmt.Sprintf("%v", resp.Candidates[0].Content.Parts[0])
-    
-    log.WithFields(log.Fields{"generated_text_length": len(generatedText)}).Debug("Received response from Gemini.")
+	manimCodePart := resp.Candidates[0].Content.Parts[0]
+	manimCode, ok := manimCodePart.(genai.Text)
+	if !ok {
+		log.Errorf("Gemini response part is not text for Manim code: %v", manimCodePart)
+		return "", fmt.Errorf("gemini API returned non-text content for Manim code generation")
+	}
 
-    // The LLM is instructed to wrap the code in ```python ... ```
-    // We need to extract only the code part.
-    codeBlockStart := "```python\n"
-    codeBlockEnd := "```"
+	responseString := string(manimCode)
+	log.Debugf("Gemini raw Manim code response: %s", responseString)
 
-    startIndex := strings.Index(generatedText, codeBlockStart)
-    if startIndex == -1 {
-        log.Warnf("Could not find start of Python code block in LLM response: %s", generatedText)
-        return "", fmt.Errorf("LLM response did not contain a valid Python code block marker")
-    }
-    
-    // Adjust start index to skip the marker itself
-    startIndex += len(codeBlockStart)
+	// Clean up potential markdown code fences from Gemini's response
+	// This is important as Gemini often wraps code in triple backticks.
+	cleanedCode := strings.TrimSpace(responseString)
+	if strings.HasPrefix(cleanedCode, "```python") && strings.HasSuffix(cleanedCode, "```") {
+		cleanedCode = strings.TrimPrefix(cleanedCode, "```python")
+		cleanedCode = strings.TrimSuffix(cleanedCode, "```")
+		cleanedCode = strings.TrimSpace(cleanedCode)
+	} else if strings.HasPrefix(cleanedCode, "```") && strings.HasSuffix(cleanedCode, "```") { // Less specific markdown fence
+		cleanedCode = strings.TrimPrefix(cleanedCode, "```")
+		cleanedCode = strings.TrimSuffix(cleanedCode, "```")
+		cleanedCode = strings.TrimSpace(cleanedCode)
+	}
 
-    endIndex := strings.LastIndex(generatedText, codeBlockEnd)
-    if endIndex == -1 || endIndex < startIndex {
-        log.Warnf("Could not find end of Python code block in LLM response: %s", generatedText)
-        return "", fmt.Errorf("LLM response did not contain a valid closing code block marker")
-    }
+	log.Infof("Successfully generated Manim code for prompt: %s", prompt)
+	return cleanedCode, nil
+}
 
-    manimCode := generatedText[startIndex:endIndex]
-    manimCode = strings.TrimSpace(manimCode) // Trim any leading/trailing whitespace
-
-    log.WithFields(log.Fields{"extracted_code_length": len(manimCode)}).Info("Manim code extracted successfully from LLM response.")
-    return manimCode, nil
+// Close gracefully closes the underlying Gemini client.
+// This should be called when your application is shutting down to release resources.
+func (s *Service) Close() error {
+	log.Info("Closing Gemini AI service client.")
+	if s.client != nil {
+		log.Warn("No explicit `Close()` method available for `*genai.GenerativeModel`. Resource cleanup is handled by Go's garbage collector.")
+	}
+	return nil
 }

@@ -31,7 +31,7 @@ func main(){
 	}
 	defer db.CloseDB()
 
-	llmClient, err := llm.NewLLMClient(cfg)
+	llmClient, err := llm.NewGeminiService(cfg.GeminiAPIKey)
 	if err != nil {
 		log.Fatalf("Failed to initialize LLM client: %v", err)
 	}
@@ -61,6 +61,7 @@ func main(){
 
 	router.GET("/health",handlers.HealthCheck)
 	router.POST("/api/projects/render-callback", apiHandlers.HandleRenderCallback) // <--- CRITICAL: Callback route
+	router.POST("/api/merge_videos",apiHandlers.MergeVideosHandler)
 
 	authRoutes:=router.Group("/auth")
 	{

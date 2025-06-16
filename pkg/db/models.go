@@ -26,4 +26,5 @@ type ManimProject struct {
     VideoURL    sql.NullString    `db:"video_url"`    // <--- NEW FIELD (URL of the final video)
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
+	ParentProjectID sql.NullString `db:"parent_project_id"`
 }

@@ -1,17 +1,21 @@
 package handlers
 
 import (
-	"database/sql"
-	"net/http"
-	"strings"
-	"fmt"
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
-	"github.com/ASHISH26940/manim-orchestrator-api/pkg/db"
-	"github.com/ASHISH26940/manim-orchestrator-api/pkg/llm"
+
 	"github.com/ASHISH26940/manim-orchestrator-api/pkg/config"
+	"github.com/ASHISH26940/manim-orchestrator-api/pkg/db"
 	"github.com/ASHISH26940/manim-orchestrator-api/pkg/db/queries"
+	"github.com/ASHISH26940/manim-orchestrator-api/pkg/llm"
 	"github.com/ASHISH26940/manim-orchestrator-api/pkg/middleware"
 	"github.com/ASHISH26940/manim-orchestrator-api/pkg/utils"
 	"github.com/gin-gonic/gin"
@@ -22,13 +26,13 @@ import (
 
 type Handlers struct {
 	Config    *config.Config
-	LLMClient *llm.LLMClient
+	LLMClient *llm.Service
 }
 // --- Request/Response Structs ---// Handlers struct to hold dependencies
 
 
 // NewHandlers creates a new instance of Handlers
-func NewHandlers(cfg *config.Config, llmClient *llm.LLMClient) *Handlers {
+func NewHandlers(cfg *config.Config, llmClient *llm.Service) *Handlers {
 	return &Handlers{
 		Config:    cfg,
 		LLMClient: llmClient,
@@ -79,6 +83,28 @@ type ProjectResponse struct {
 	CreatedAt    string    `json:"created_at"` // Using string for formatted timestamp
 	UpdatedAt    string    `json:"updated_at"`
 }
+
+
+// Request payload structure for merging videos
+type MergeVideoRequest struct {
+	IDs []string `json:"ids"` // List of video IDs (likely UUID strings) to merge
+}
+
+// Response payload structure from the Python renderer
+type PythonMergeResponse struct {
+	Message        string `json:"message"`
+	MergedVideoID  string `json:"merged_video_id"`  // The UUID of the merged video
+	MergedVideoURL string `json:"merged_video_url"` // The R2 URL from Python
+	Error          string `json:"error"`             // Python might send an 'error' field
+}
+
+// Final response structure for frontend
+type MergedVideoResponse struct {
+	Message        string `json:"message"`
+	MergedVideoID  string `json:"merged_video_id"`
+	MergedVideoURL string `json:"merged_video_url"` // This will be the transformed R2 URL sent to frontend
+}
+
 
 // newProjectResponse converts a db.ManimProject to a ProjectResponse.
 func newProjectResponse(project *db.ManimProject) ProjectResponse {
@@ -552,4 +578,175 @@ func (h *Handlers) HandleRenderCallback(c *gin.Context) {
 	}
 
 	utils.ResponseWithSuccess(c, http.StatusOK, "Callback processed successfully", nil)
+}
+
+// --- MergeVideosHandler (Auth Check Removed) ---
+func (h *Handlers) MergeVideosHandler(c *gin.Context) {
+	// --- AUTHENTICATION AND USER CLAIMS CHECK REMOVED ---
+	// You might also remove middleware.GetUserClaimsFromContext if it's not used anywhere else
+	// and you remove related import.
+
+	// 1. Parse the incoming request body from the frontend
+	var req MergeVideoRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Errorf("MergeVideosHandler: Invalid request body: %v", err)
+		utils.ResponseWithError(c, http.StatusBadRequest, "Invalid request body. 'ids' (list of video IDs) is required.", err.Error())
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		log.Warn("MergeVideosHandler: No video IDs provided for merging.")
+		utils.ResponseWithError(c, http.StatusBadRequest, "No video IDs provided for merging.", nil)
+		return
+	}
+
+	// --- OPTIONAL: OWNERSHIP VALIDATION REMOVED ---
+	// Since there's no user authenticated, you cannot validate ownership against a user ID.
+	// If you still need to ensure videos exist, you'd perform queries.FindManimProjectByID
+	// for each ID without checking `project.UserID` against `claims.UserID`.
+	/*
+		for _, videoIDStr := range req.IDs {
+			videoID, err := uuid.Parse(videoIDStr)
+			if err != nil {
+				log.Warnf("MergeVideosHandler: Invalid video ID format '%s': %v", videoIDStr, err)
+				utils.ResponseWithError(c, http.StatusBadRequest, fmt.Sprintf("Invalid video ID format: %s", videoIDStr), nil)
+				return
+			}
+			// This check for `project.UserID != claims.UserID` is no longer applicable
+			// without `claims`. If you still want to ensure projects exist,
+			// just remove the `claims.UserID` part.
+			project, err := queries.FindManimProjectByID(videoID)
+			if err != nil {
+				log.Errorf("MergeVideosHandler: Failed to fetch video/project %s for existence check: %v", videoID.String(), err)
+				utils.ResponseWithError(c, http.StatusInternalServerError, "Failed to verify video existence", nil)
+				return
+			}
+			if project == nil {
+				log.Warnf("MergeVideosHandler: Video/project %s not found.", videoID.String())
+				utils.ResponseWithError(c, http.StatusNotFound, fmt.Sprintf("Video ID not found: %s", videoID.String()), nil)
+				return
+			}
+		}
+		log.Infof("MergeVideosHandler: Verified existence for %d video IDs.", len(req.IDs))
+	*/
+
+
+	// 2. Get the Python renderer URL for merging from your config
+	pythonMergeRendererURL := h.Config.ManimRendererURL
+	if pythonMergeRendererURL == "" {
+		log.Error("MergeVideosHandler: h.Config.ManimRendererURL is not set. Cannot proceed with merging.")
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Backend configuration error: Python renderer URL for merging not set.", nil)
+		return
+	}
+	log.Infof("MergeVideosHandler: Using Python renderer URL for merging from config: %s", pythonMergeRendererURL)
+
+	// Fetch R2 domain configuration from environment variables (consider moving to h.Config)
+	pythonR2InternalDomain := os.Getenv("PYTHON_R2_INTERNAL_DOMAIN")
+	frontendR2PublicDomain := os.Getenv("FRONTEND_R2_PUBLIC_DOMAIN")
+
+	if pythonR2InternalDomain == "" || frontendR2PublicDomain == "" {
+		log.Warn("MergeVideosHandler: PYTHON_R2_INTERNAL_DOMAIN or FRONTEND_R2_PUBLIC_DOMAIN not set. Merged video URL will not be transformed for frontend display.")
+	}
+
+	// 3. Prepare the request payload to send to the Python renderer
+	payloadBytes, err := json.Marshal(req)
+	if err != nil {
+		log.Errorf("MergeVideosHandler: Failed to marshal payload for Python renderer: %v", err)
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Internal server error preparing merge request.", nil)
+		return
+	}
+
+	// Construct the full endpoint for the merge operation on the Python renderer
+	flaskEndpoint := fmt.Sprintf("%s/merge_videos", pythonMergeRendererURL)
+	log.Infof("MergeVideosHandler: Forwarding merge request to Python renderer at: %s with IDs: %v", flaskEndpoint, req.IDs)
+
+	// 4. Make the HTTP POST request to the Python renderer
+	client := &http.Client{Timeout: 60 * time.Second} // Give Python some time to merge
+	resp, err := client.Post(flaskEndpoint, "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		log.Errorf("MergeVideosHandler: Failed to connect to Python renderer at %s: %v", flaskEndpoint, err)
+		utils.ResponseWithError(c, http.StatusBadGateway, "Failed to connect to video processing service for merging.", nil)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 5. Read and parse the response from the Python renderer
+	responseBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Errorf("MergeVideosHandler: Failed to read response from Python renderer: %v", err)
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Error reading response from video merging service.", nil)
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Errorf("MergeVideosHandler: Python renderer returned status %d with body: %s", resp.StatusCode, string(responseBody))
+		var pythonErrorResp PythonMergeResponse
+		if jsonErr := json.Unmarshal(responseBody, &pythonErrorResp); jsonErr == nil && pythonErrorResp.Error != "" {
+			utils.ResponseWithError(c, resp.StatusCode, pythonErrorResp.Error, nil)
+		} else {
+			utils.ResponseWithError(c, resp.StatusCode, "Video merging service reported an error.", string(responseBody))
+		}
+		return
+	}
+
+	// 6. Successfully merged - parse Python's success response
+	var pythonSuccessResp PythonMergeResponse
+	if err := json.Unmarshal(responseBody, &pythonSuccessResp); err != nil {
+		log.Errorf("MergeVideosHandler: Failed to unmarshal success response from Python renderer: %v. Body: %s", err, string(responseBody))
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Error parsing successful merge response from Python.", nil)
+		return
+	}
+
+	// --- PERFORM THE URL TRANSFORMATION HERE ---
+	finalURLForFrontend := pythonSuccessResp.MergedVideoURL
+	if pythonSuccessResp.MergedVideoURL != "" && pythonR2InternalDomain != "" && frontendR2PublicDomain != "" {
+		parsedURL, err := url.Parse(pythonSuccessResp.MergedVideoURL)
+		if err != nil {
+			log.Warnf("MergeVideosHandler: Could not parse merged video URL from Python: %s. Error: %v. Skipping transformation.", pythonSuccessResp.MergedVideoURL, err)
+		} else {
+			internalDomain := strings.TrimSuffix(pythonR2InternalDomain, "/")
+			publicDomain := strings.TrimSuffix(frontendR2PublicDomain, "/")
+
+			if strings.EqualFold(parsedURL.Scheme+"://"+parsedURL.Host, internalDomain) {
+				originalURL := pythonSuccessResp.MergedVideoURL
+				finalURLForFrontend = fmt.Sprintf("%s%s", publicDomain, parsedURL.Path)
+				log.Infof("MergeVideosHandler: Transformed URL from %s to %s", originalURL, finalURLForFrontend)
+			} else {
+				log.Warnf("MergeVideosHandler: Merged video URL '%s' does not use expected internal domain '%s'. No transformation applied.", pythonSuccessResp.MergedVideoURL, internalDomain)
+			}
+		}
+	} else if pythonSuccessResp.MergedVideoURL != "" {
+		log.Warn("MergeVideosHandler: Domain transformation skipped due to missing environment variables. Merged video URL is not transformed.")
+	}
+	// --- END URL TRANSFORMATION ---
+
+	// --- Store the final R2 URL in Neon PostgreSQL using your 'db' package ---
+	if db.DB == nil {
+		log.Error("MergeVideosHandler: Database connection (db.DB) is not initialized.")
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Database connection error.", nil)
+		return
+	}
+
+	query := `INSERT INTO merged_videos (id, r2_url) VALUES (:id, :r2_url) ON CONFLICT (id) DO UPDATE SET r2_url = EXCLUDED.r2_url;`
+
+	_, err = db.DB.NamedExec(query, map[string]interface{}{
+		"id":     pythonSuccessResp.MergedVideoID,
+		"r2_url": finalURLForFrontend,
+	})
+	if err != nil {
+		log.Errorf("MergeVideosHandler: Failed to insert/update merged video URL in Neon DB: %v", err)
+		utils.ResponseWithError(c, http.StatusInternalServerError, "Failed to record merged video in database.", nil)
+		return
+	}
+	log.Infof("MergeVideosHandler: Successfully stored R2 URL '%s' for ID '%s' in Neon DB.", finalURLForFrontend, pythonSuccessResp.MergedVideoID)
+	// --- END Neon PostgreSQL Storage ---
+
+	// 7. Respond to the frontend with the merged video details
+	log.Infof("MergeVideosHandler: Successfully merged videos. Final URL for frontend: %s", finalURLForFrontend)
+	finalResponse := MergedVideoResponse{
+		Message:        "Videos merged, uploaded to R2, and URL recorded in Neon successfully.",
+		MergedVideoID:  pythonSuccessResp.MergedVideoID,
+		MergedVideoURL: finalURLForFrontend, // This is the transformed R2 URL
+	}
+	utils.ResponseWithSuccess(c, http.StatusOK, "Videos merged and uploaded successfully", finalResponse)
 }
