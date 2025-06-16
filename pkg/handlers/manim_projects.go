@@ -463,10 +463,11 @@ func (h *Handlers) TriggerManimGenerationAndRender(c *gin.Context) {
     } else {
         // For Render.com, services are always accessible via HTTPS on their public domain (port 443).
         // Do NOT include the internal application port (like :8000) in the public URL.
-        callbackURL = fmt.Sprintf("https://%s/api/projects/render-callback", orchestratorPublicHost)
+        callbackURL = "https://manim-orchestrator-api.onrender.com/api/projects/render-callback"
         log.Infof("Using public Render.com callback URL: %s", callbackURL)
     }
 
+	log.Infof("%s",callbackURL)
 
 	rendererReqBody := RendererRequest{
 		ProjectID:     project.ID.String(),
