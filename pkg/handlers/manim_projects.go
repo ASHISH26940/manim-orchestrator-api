@@ -450,14 +450,8 @@ func (h *Handlers) TriggerManimGenerationAndRender(c *gin.Context) {
 	log.Infof("Manim code generated for project %s. Length: %d", projectID.String(), len(generatedManimCode))
 
 	callbackHost := h.Config.Host // Default assuming Go is in Docker-Compose where HOST is its service name
-    if h.Config.Host == "https://manim-orchestrator-api.onrender.com" || h.Config.Host == "0.0.0.0" { // ADDED "0.0.0.0" check
-        // This is a common pattern for Docker Desktop to reach host services.
-        // For production or pure Linux setups, review your networking.
-        callbackHost = "host.docker.internal"
-    }
-    // IMPORTANT: Make sure the callback endpoint is correctly configured in your Go router
-    // to match this URL structure (e.g., /api/projects/render-callback).
-    callbackURL := fmt.Sprintf("http://%s:%s/api/projects/render-callback", callbackHost, h.Config.Port)
+    callbackURL := fmt.Sprintf("%s:%s/api/projects/render-callback", callbackHost, h.Config.Port)
+	log.Infof("%s",callbackURL)
 
 
 	rendererReqBody := RendererRequest{
