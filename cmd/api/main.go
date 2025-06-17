@@ -44,18 +44,15 @@ func main(){
 	// --- CORS CONFIGURATION ---
 	// Configure CORS middleware
 	router.Use(cors.New(cors.Config{
-		// Allow requests from your Next.js frontend development server
-		AllowOrigins: []string{"http://localhost:3000,https://manime-frontend-gen.vercel.app"},
-		// Allow common HTTP methods
-		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		// Allow common headers, including Authorization for JWT
-		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		// Allow sending of credentials (like cookies or HTTP authentication headers)
-		// Set to true if you are using cookies/session, otherwise false. For JWT in Authorization header, it's generally fine.
-		AllowCredentials: true,
-		// MaxAge defines the maximum age of the CORS preflight request in seconds.
-		// During this time, the browser will not send a preflight request for the same URL.
-		MaxAge: 12 * time.Hour,
+		// 🚨 DANGER: Allows ALL origins. Use with EXTREME CAUTION in production.
+		AllowOrigins: []string{"*"},
+		// If you allow all origins, AllowCredentials MUST be false unless you
+		// specifically handle authenticated requests without cookies.
+		// For JWTs in Authorization header, this can often be false.
+		AllowCredentials: false, // Set to false when AllowOrigins is "*"
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		MaxAge:           12 * time.Hour,
 	}))
 	
 
