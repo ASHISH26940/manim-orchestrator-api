@@ -67,6 +67,7 @@ func main(){
 	{
 		authRoutes.POST("/register",handlers.RegisterUser)
 		authRoutes.POST("/login", handlers.LoginUser)
+		
 	}
 
 	protectedRoutes := router.Group("/api")
@@ -87,6 +88,7 @@ func main(){
 				"username": claims.Username,
 			})
 		})
+		protectedRoutes.POST("/delete",handlers.DeleteUser)
 		// Other protected routes will go here in future iterations
 		// protectedRoutes.POST("/projects", handlers.CreateProject)
 
