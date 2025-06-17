@@ -45,7 +45,7 @@ func main(){
 	// Configure CORS middleware
 	router.Use(cors.New(cors.Config{
 		// Allow requests from your Next.js frontend development server
-		AllowOrigins: []string{"http://localhost:3000"},
+		AllowOrigins: []string{"http://localhost:3000,https://manime-frontend-gen.vercel.app"},
 		// Allow common HTTP methods
 		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		// Allow common headers, including Authorization for JWT
