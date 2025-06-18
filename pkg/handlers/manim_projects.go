@@ -591,9 +591,6 @@ func (h *Handlers) HandleRenderCallback(c *gin.Context) {
 
 // --- MergeVideosHandler (Auth Check Removed) ---
 func (h *Handlers) MergeVideosHandler(c *gin.Context) {
-	// --- AUTHENTICATION AND USER CLAIMS CHECK REMOVED ---
-	// You might also remove middleware.GetUserClaimsFromContext if it's not used anywhere else
-	// and you remove related import.
 
 	// 1. Parse the incoming request body from the frontend
 	var req MergeVideoRequest
