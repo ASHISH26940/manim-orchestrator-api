@@ -26,7 +26,7 @@ func NewGeminiService(apiKey string) (*Service, error) {
 		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
 	}
 	// Use the 'gemini-pro' model for text generation
-	model := client.GenerativeModel("gemini-1.5-flash")
+	model := client.GenerativeModel("gemini-2.5-flash")
 	return &Service{client: model, ctx: ctx}, nil
 }
 
